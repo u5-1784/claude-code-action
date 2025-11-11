@@ -134,6 +134,11 @@ runs:
         ANTHROPIC_MODEL: ${{ inputs.model || inputs.anthropic_model }}
         GITHUB_TOKEN: ${{ steps.prepare.outputs.GITHUB_TOKEN }}
 
+        # OAuth configuration (required for Claude Max subscriptions)
+        CLAUDE_ACCESS_TOKEN: ${{ inputs.claude_access_token }}
+        CLAUDE_REFRESH_TOKEN: ${{ inputs.claude_refresh_token }}
+        CLAUDE_EXPIRES_AT: ${{ inputs.claude_expires_at }}
+
         # AWS configuration
         AWS_REGION: ${{ env.AWS_REGION }}
         AWS_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
