@@ -1,0 +1,221 @@
+name: Check Upstream Updates
+
+# upstreamの更新を週次でチェック（通知のみ、マージはしない）
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # 毎週日曜日 0:00 UTC
+  workflow_dispatch:  # 手動実行も可能
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write  # Issue作成に必要
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 全履歴を取得
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/Akira-Papa/claude-code-action.git || true
+
+      - name: Fetch upstream
+        run: git fetch upstream
+
+      - name: Check for updates
+        id: check
+        run: |
+          # upstreamのmainと現在のmainを比較
+          COMMITS_BEHIND=$(git rev-list --count HEAD..upstream/main)
+          echo "commits_behind=$COMMITS_BEHIND" >> $GITHUB_OUTPUT
+
+          if [ "$COMMITS_BEHIND" -gt 0 ]; then
+            echo "⚠️ Upstream is $COMMITS_BEHIND commits ahead"
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+
+            # 変更内容を取得
+            git log --oneline HEAD..upstream/main > /tmp/upstream_changes.txt
+
+            # 変更されたファイルを確認
+            git diff --name-only HEAD..upstream/main > /tmp/changed_files.txt
+          else
+            echo "✅ No updates from upstream"
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check conflicts with custom changes
+        if: steps.check.outputs.has_updates == 'true'
+        id: conflict_check
+        run: |
+          # 独自変更したファイルのリスト
+          CUSTOM_FILES="src/github/context.ts"
+
+          CONFLICT_WARNING=""
+          for file in $CUSTOM_FILES; do
+            if git diff --name-only HEAD..upstream/main | grep -q "^$file$"; then
+              CONFLICT_WARNING="${CONFLICT_WARNING}⚠️ \`$file\` has changes in upstream (may conflict with custom changes)\n"
+            fi
+          done
+
+          if [ -n "$CONFLICT_WARNING" ]; then
+            echo "has_conflicts=true" >> $GITHUB_OUTPUT
+            echo "conflict_files<<EOF" >> $GITHUB_OUTPUT
+            echo -e "$CONFLICT_WARNING" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "has_conflicts=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create notification issue
+        if: steps.check.outputs.has_updates == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const changes = fs.readFileSync('/tmp/upstream_changes.txt', 'utf8');
+            const changedFiles = fs.readFileSync('/tmp/changed_files.txt', 'utf8');
+
+            const hasConflicts = '${{ steps.conflict_check.outputs.has_conflicts }}' === 'true';
+            const conflictWarning = hasConflicts
+              ? `\n### ⚠️ 競合の可能性\n\n${{ steps.conflict_check.outputs.conflict_files }}\n\n独自変更と競合する可能性があります。同期時は慎重に対応してください。\n`
+              : '';
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔔 Upstream has ${{ steps.check.outputs.commits_behind }} new commits`,
+              body: `## Upstream更新通知
+
+[Akira-Papa/claude-code-action](https://github.com/Akira-Papa/claude-code-action)に新しい更新があります。
+
+### 📊 更新サマリー
+
+- **コミット数:** ${{ steps.check.outputs.commits_behind }} commits
+- **競合リスク:** ${hasConflicts ? '⚠️ あり' : '✅ なし'}
+${conflictWarning}
+### 📝 更新内容
+
+\`\`\`
+${changes}
+\`\`\`
+
+### 📁 変更されたファイル
+
+\`\`\`
+${changedFiles}
+\`\`\`
+
+---
+
+## 🔄 手動で同期する方法
+
+### Step 1: 差分を確認
+
+\`\`\`bash
+cd /home/u5/project/claude-code-action
+
+# upstreamの最新を取得
+git fetch upstream
+
+# コミット履歴を確認
+git log --oneline HEAD..upstream/main
+
+# 詳細な差分を確認
+git diff HEAD..upstream/main
+
+# 特定ファイルの差分を確認（例: context.ts）
+git diff HEAD..upstream/main -- src/github/context.ts
+\`\`\`
+
+### Step 2: 独自変更への影響を評価
+
+**独自変更を確認:**
+- \`src/github/context.ts\` - repository_dispatch対応
+- 詳細は [FORK_CHANGES.md](https://github.com/${{ github.repository }}/blob/main/FORK_CHANGES.md) を参照
+
+**評価ポイント:**
+- [ ] upstreamの変更が独自変更と競合しないか？
+- [ ] 新機能が必要か？
+- [ ] 現在のバージョンで問題なく動作しているか？
+
+### Step 3: 同期を実行（問題なければ）
+
+\`\`\`bash
+# 同期ブランチを作成
+git checkout -b upstream-sync-$(date +%Y%m%d)
+
+# マージ
+git merge upstream/main
+
+# 競合があれば解決
+# ⚠️ 競合解決時は必ず独自変更を保持すること
+# - src/github/context.ts の repository_dispatch 対応を維持
+# - 分からない場合は upstream/main の内容を一旦破棄して手動で再実装
+
+# 解決後
+git add .
+git commit
+
+# テスト実行（必須！）
+npm install
+npm run typecheck
+
+# 問題なければmainにマージ
+git checkout main
+git merge upstream-sync-$(date +%Y%m%d)
+git push origin main
+
+# 同期ブランチを削除
+git branch -d upstream-sync-$(date +%Y%m%d)
+\`\`\`
+
+### Step 4: 動作確認
+
+\`\`\`bash
+# notehub-infraで実際にテスト
+cd /home/u5/project/notehub-infra
+
+# Turn 1ワークフローを手動実行
+# repository_dispatch経由でトリガーして動作確認
+\`\`\`
+
+---
+
+## ⚠️ 同期を見送る判断基準
+
+以下の場合は同期を見送ることも検討してください：
+
+- ✋ upstreamの変更が独自変更（repository_dispatch対応）と競合する
+- ✋ 現在のバージョンで安定して動作している
+- ✋ upstreamの新機能が不要
+- ✋ 競合解決に自信がない（後日対応でも可）
+
+**重要:** 無理に同期する必要はありません。必要性とリスクを天秤にかけて判断してください。
+
+---
+
+## 📚 参考情報
+
+### 独自変更の詳細
+- [FORK_CHANGES.md](https://github.com/${{ github.repository }}/blob/main/FORK_CHANGES.md)
+
+### 競合解決のヘルプ
+- [Git公式ドキュメント - マージの競合を解決する](https://git-scm.com/book/ja/v2/Git-%E3%81%AE%E3%83%96%E3%83%A9%E3%83%B3%E3%83%81%E6%A9%9F%E8%83%BD-%E3%83%96%E3%83%A9%E3%83%B3%E3%83%81%E3%81%A8%E3%83%9E%E3%83%BC%E3%82%B8%E3%81%AE%E5%9F%BA%E6%9C%AC#_basic_merge_conflicts)
+
+### upstreamリポジトリ
+- https://github.com/Akira-Papa/claude-code-action
+
+---
+
+🤖 自動生成Issue by GitHub Actions
+
+**このIssueの対応:**
+- 内容を確認して、同期が必要か判断してください
+- 同期を見送る場合はこのIssueをクローズしてください
+- 同期した場合は、このIssueに結果をコメントしてクローズしてください`,
+              labels: ['upstream-check', 'notification']
+            });
