@@ -180,7 +180,7 @@ This action supports the following GitHub events ([learn more GitHub event trigg
 - `issues` - When issues are opened or assigned
 - `pull_request_review` - When PR reviews are submitted
 - `pull_request_review_comment` - When comments are made on PR reviews
-- `repository_dispatch` - Custom events triggered via API (coming soon)
+- `repository_dispatch` - Custom events triggered via API (✅ **supported**)
 - `workflow_dispatch` - Manual workflow triggers (coming soon)
 
 #### Automated Documentation Updates
@@ -227,6 +227,52 @@ jobs:
 ```
 
 Perfect for automatically reviewing PRs from new team members, external contributors, or specific developers who need extra guidance.
+
+#### Multi-Turn Workflow with Repository Dispatch
+
+Trigger Claude through custom API events for complex multi-turn workflows (see example workflow):
+
+```yaml
+name: Claude Multi-Turn Workflow
+on:
+  repository_dispatch:
+    types: [claude-turn1]
+
+jobs:
+  claude-response:
+    runs-on: self-hosted
+    steps:
+      - uses: Akira-Papa/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Trigger the workflow via GitHub API:
+
+```bash
+curl -X POST \
+  -H "Accept: application/vnd.github.v3+json" \
+  -H "Authorization: token YOUR_GITHUB_TOKEN" \
+  https://api.github.com/repos/OWNER/REPO/dispatches \
+  -d '{
+    "event_type": "claude-turn1",
+    "client_payload": {
+      "issue_number": 123
+    }
+  }'
+```
+
+**Requirements:**
+- `client_payload.issue_number` is required when using `repository_dispatch`
+- The event will be treated as an issue event (not a PR)
+- Maximum 10 top-level properties in `client_payload`
+- Maximum 65,535 characters total
+
+This is useful for:
+- Orchestrating multi-step workflows across different actions
+- Creating custom automation triggers from external systems
+- Building complex CI/CD pipelines with Claude integration
 
 ## How It Works
 
