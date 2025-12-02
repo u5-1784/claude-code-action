@@ -106,9 +106,10 @@ export function parseGitHubContext(): ParsedGitHubContext {
       };
     }
     case "repository_dispatch": {
-      // repository_dispatchイベントからissue_numberを取得
+      // repository_dispatchイベントからissue_numberとactorを取得
       const dispatchPayload = context.payload as RepositoryDispatchEvent;
       const issueNumber = (dispatchPayload.client_payload as any)?.issue_number;
+      const originalActor = (dispatchPayload.client_payload as any)?.actor;
 
       if (!issueNumber) {
         throw new Error(
@@ -118,6 +119,8 @@ export function parseGitHubContext(): ParsedGitHubContext {
 
       return {
         ...commonFields,
+        // client_payloadにactorが含まれている場合はそれを使用、なければデフォルト
+        actor: originalActor || context.actor,
         payload: dispatchPayload,
         entityNumber: parseInt(String(issueNumber)),
         isPR: false, // repository_dispatchでは基本的にissueとして扱う

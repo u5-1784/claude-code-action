@@ -17,6 +17,26 @@ export async function checkWritePermissions(
   try {
     core.info(`Checking permissions for actor: ${actor}`);
 
+    // repository_dispatchの場合で、actorがgithub-actions[bot]の場合は
+    // トークン自体の権限をテストする
+    if (context.eventName === 'repository_dispatch' && actor === 'github-actions[bot]') {
+      core.info('repository_dispatch with github-actions[bot] detected, testing token permissions directly');
+
+      try {
+        // トークンで実際にリポジトリ情報を取得できるかテスト
+        await octokit.repos.get({
+          owner: repository.owner,
+          repo: repository.repo,
+        });
+
+        core.info('✅ Token has repository access - permissions verified');
+        return true;
+      } catch (tokenError) {
+        core.error(`Token lacks repository access: ${tokenError}`);
+        return false;
+      }
+    }
+
     // Check permissions directly using the permission endpoint
     const response = await octokit.repos.getCollaboratorPermissionLevel({
       owner: repository.owner,
@@ -28,7 +48,7 @@ export async function checkWritePermissions(
     core.info(`Permission level retrieved: ${permissionLevel}`);
 
     if (permissionLevel === "admin" || permissionLevel === "write") {
-      core.info(`Actor has write access: ${permissionLevel}`);
+      core.info(`✅ Actor has write access: ${permissionLevel}`);
       return true;
     } else {
       core.warning(`Actor has insufficient permissions: ${permissionLevel}`);
