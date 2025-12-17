@@ -80,7 +80,10 @@ inputs:
 outputs:
   execution_file:
     description: "Path to the Claude Code execution output file"
-    value: ${{ steps.claude-code.outputs.execution_file }}
+    value: ${{ steps.claude-code-base.outputs.execution_file }}
+  raw_log:
+    description: "Raw log output from Claude Code execution (for ADR-0007 stdout capture)"
+    value: ${{ steps.capture-output.outputs.RAW_LOG }}
 
 runs:
   using: "composite"
@@ -110,9 +113,27 @@ runs:
         OVERRIDE_GITHUB_TOKEN: ${{ inputs.github_token }}
         GITHUB_RUN_ID: ${{ github.run_id }}
 
-    - name: Run Claude Code
+    - name: Run Claude Code (with output capture)
       id: claude-code
       if: steps.prepare.outputs.contains_trigger == 'true'
+      shell: bash
+      run: |
+        echo "🤖 Starting Claude Code execution with stdout capture..."
+
+        # 出力キャプチャ用のディレクトリ作成
+        mkdir -p /tmp/claude-output
+
+        # GitHub Actionsの制限により、別アクションのstdoutを直接キャプチャできないため、
+        # アクション実行前後のログを記録する方式を採用
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) - Starting Claude Code execution" > /tmp/claude-output/execution-log.txt
+
+        # claude-code-base-actionは別ステップで実行する必要があるため、
+        # ここでは準備のみ行う
+        echo "prepare_complete=true" >> $GITHUB_OUTPUT
+
+    - name: Execute Claude Code Base Action
+      id: claude-code-base
+      if: steps.claude-code.outputs.prepare_complete == 'true'
       uses: u5-org/claude-code-base-action@main
       with:
         prompt_file: /tmp/claude-prompts/claude-prompt.txt
@@ -157,6 +178,39 @@ runs:
         VERTEX_REGION_CLAUDE_3_5_SONNET: ${{ env.VERTEX_REGION_CLAUDE_3_5_SONNET }}
         VERTEX_REGION_CLAUDE_3_7_SONNET: ${{ env.VERTEX_REGION_CLAUDE_3_7_SONNET }}
 
+    - name: Capture Claude Output (ADR-0007)
+      id: capture-output
+      if: steps.prepare.outputs.contains_trigger == 'true' && always()
+      shell: bash
+      run: |
+        echo "📤 Capturing Claude Code output (ADR-0007)..."
+
+        # execution_fileからClaudeの出力を取得
+        RAW_LOG=""
+        EXECUTION_FILE="${{ steps.claude-code-base.outputs.execution_file }}"
+
+        if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
+          echo "✅ Found execution file: $EXECUTION_FILE"
+          RAW_LOG=$(cat "$EXECUTION_FILE")
+          echo "📊 Captured $(echo "$RAW_LOG" | wc -l) lines, $(echo "$RAW_LOG" | wc -c) bytes"
+        else
+          echo "⚠️ No execution file found"
+          RAW_LOG="No output captured from Claude Code execution"
+        fi
+
+        # 出力を環境変数に保存（次のステップで使用）
+        # マルチライン出力のためEOFを使用
+        {
+          echo 'RAW_LOG<<CLAUDE_OUTPUT_EOF'
+          echo "$RAW_LOG"
+          echo 'CLAUDE_OUTPUT_EOF'
+        } >> $GITHUB_OUTPUT
+
+        # デバッグ用にファイルにも保存
+        mkdir -p /tmp/claude-output
+        echo "$RAW_LOG" > /tmp/claude-output/raw-log.txt
+        echo "✅ Output captured and saved to /tmp/claude-output/raw-log.txt"
+
     - name: Update comment with job link
       if: steps.prepare.outputs.contains_trigger == 'true' && steps.prepare.outputs.claude_comment_id && always()
       shell: bash
@@ -173,17 +227,17 @@ runs:
         CLAUDE_BRANCH: ${{ steps.prepare.outputs.CLAUDE_BRANCH }}
         IS_PR: ${{ github.event.issue.pull_request != null || github.event_name == 'pull_request_review_comment' }}
         DEFAULT_BRANCH: ${{ steps.prepare.outputs.DEFAULT_BRANCH }}
-        CLAUDE_SUCCESS: ${{ steps.claude-code.outputs.conclusion == 'success' }}
-        OUTPUT_FILE: ${{ steps.claude-code.outputs.execution_file || '' }}
+        CLAUDE_SUCCESS: ${{ steps.claude-code-base.outputs.conclusion == 'success' }}
+        OUTPUT_FILE: ${{ steps.claude-code-base.outputs.execution_file || '' }}
         TRIGGER_USERNAME: ${{ github.event.comment.user.login || github.event.issue.user.login || github.event.pull_request.user.login || github.event.sender.login || github.triggering_actor || github.actor || '' }}
 
     - name: Display Claude Code Report
-      if: steps.prepare.outputs.contains_trigger == 'true' && steps.claude-code.outputs.execution_file != ''
+      if: steps.prepare.outputs.contains_trigger == 'true' && steps.claude-code-base.outputs.execution_file != ''
       shell: bash
       run: |
         echo "## Claude Code Report" >> $GITHUB_STEP_SUMMARY
         echo '```json' >> $GITHUB_STEP_SUMMARY
-        cat "${{ steps.claude-code.outputs.execution_file }}" >> $GITHUB_STEP_SUMMARY
+        cat "${{ steps.claude-code-base.outputs.execution_file }}" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
 
     - name: Revoke app token
