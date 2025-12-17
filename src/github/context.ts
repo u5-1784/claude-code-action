@@ -126,6 +126,23 @@ export function parseGitHubContext(): ParsedGitHubContext {
         isPR: false, // repository_dispatchでは基本的にissueとして扱う
       };
     }
+    case "workflow_dispatch": {
+      // workflow_dispatchイベントからissue_numberを取得
+      const issueNumber = (context.payload.inputs as any)?.issue_number;
+
+      if (!issueNumber) {
+        throw new Error(
+          "workflow_dispatch event requires inputs.issue_number",
+        );
+      }
+
+      return {
+        ...commonFields,
+        payload: context.payload as any,
+        entityNumber: parseInt(String(issueNumber)),
+        isPR: false, // workflow_dispatchでは基本的にissueとして扱う
+      };
+    }
     default:
       throw new Error(`Unsupported event type: ${context.eventName}`);
   }

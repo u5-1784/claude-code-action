@@ -281,6 +281,31 @@ export function prepareContext(
       };
       break;
 
+    case "workflow_dispatch":
+      if (!issueNumber) {
+        throw new Error("ISSUE_NUMBER is required for workflow_dispatch event");
+      }
+      if (isPR) {
+        throw new Error("IS_PR must be false for workflow_dispatch event");
+      }
+      if (!defaultBranch) {
+        throw new Error("DEFAULT_BRANCH is required for workflow_dispatch event");
+      }
+      if (!claudeBranch) {
+        throw new Error("CLAUDE_BRANCH is required for workflow_dispatch event");
+      }
+
+      // workflow_dispatchは issues (opened) と同じ動作
+      eventData = {
+        eventName: "issues",
+        eventAction: "opened",
+        isPR: false,
+        issueNumber,
+        defaultBranch,
+        claudeBranch,
+      };
+      break;
+
     default:
       throw new Error(`Unsupported event type: ${eventName}`);
   }
